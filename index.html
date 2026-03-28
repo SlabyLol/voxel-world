@@ -2,38 +2,214 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>DarkFox Voxel Engine</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        /* FIX: Verhindert das Verschieben des Screens */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body, html { 
+            width: 100%; height: 100%; 
+            overflow: hidden; 
+            background: #000; 
+            touch-action: none; /* Verhindert Mobile-Scrollen */
+            position: fixed;
+        }
+        canvas { display: block; width: 100vw; height: 100vh; }
+
+        /* UI Styles */
+        #ui-layer {
+            position: absolute; inset: 0;
+            z-index: 10; pointer-events: none;
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        #menu {
+            pointer-events: auto; background: rgba(0,0,0,0.9);
+            padding: 40px; border: 3px solid #55ff55;
+            text-align: center; color: white; border-radius: 20px;
+        }
+        input { padding: 10px; margin: 10px; width: 100%; border: none; }
+        .btn {
+            padding: 15px 30px; margin: 10px; cursor: pointer;
+            background: #55ff55; border: none; font-weight: bold;
+            transition: 0.2s;
+        }
+        .btn:hover { background: #fff; }
+
+        #crosshair {
+            position: absolute; width: 15px; height: 15px;
+            border: 2px solid white; border-radius: 50%;
+            mix-blend-mode: difference;
+        }
+
+        #mobile-controls {
+            position: absolute; bottom: 20px; width: 100%;
+            display: none; justify-content: space-between; padding: 0 30px;
+        }
+        .m-btn {
+            width: 70px; height: 70px; background: rgba(255,255,255,0.2);
+            border: 2px solid white; border-radius: 50%; color: white;
+            pointer-events: auto; display: flex; align-items: center; justify-content: center;
+        }
+        .hidden { display: none !important; }
+    </style>
 </head>
 <body>
+
     <div id="ui-layer">
-        <div id="start-menu">
+        <div id="crosshair" class="hidden"></div>
+
+        <div id="menu">
             <h1>DARKFOX VOXEL</h1>
-            <div class="btn-group">
-                <button id="btn-pc">START PC MODE</button>
-                <button id="btn-mobile">START MOBILE MODE</button>
+            <input type="text" id="world-name" placeholder="Name your world...">
+            <div style="display: flex;">
+                <button class="btn" onclick="start('pc')">CREATE WORLD (PC)</button>
+                <button class="btn" onclick="start('mobile')">CREATE WORLD (MOBILE)</button>
             </div>
-            <p id="peer-status">ID: Generating...</p>
+            <p style="font-size: 10px; margin-top: 10px;">© 2026 DarkFox Co. | Lead Coder: Tobias</p>
         </div>
 
-        <div id="mobile-controls" class="hidden">
-            <div id="joystick-zone"></div>
-            <button id="btn-jump">JUMP</button>
-            <button id="btn-action">PLACE</button>
-        </div>
-
-        <div id="hotbar">
-            <div class="slot active" data-color="0x55aa55">GRASS</div>
-            <div class="slot" data-color="0x8B4513">DIRT</div>
-            <div class="slot" data-color="0x808080">STONE</div>
+        <div id="mobile-controls">
+            <div class="m-btn" id="m-up">▲</div>
+            <div style="display: flex; gap: 10px;">
+                <div class="m-btn" id="m-place">ADD</div>
+                <div class="m-btn" id="m-jump">JUMP</div>
+            </div>
         </div>
     </div>
 
     <script type="importmap">
         { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
     </script>
-    <script type="module" src="core.js"></script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/PointerLockControls.js';
+
+        let scene, camera, renderer, controls, platform;
+        let blocks = [];
+        let move = { f: false, b: false, l: false, r: false };
+        let velocity = new THREE.Vector3();
+        let clock = new THREE.Clock();
+
+        window.start = (mode) => {
+            platform = mode;
+            document.getElementById('menu').classList.add('hidden');
+            document.getElementById('crosshair').classList.remove('hidden');
+            if(platform === 'mobile') document.getElementById('mobile-controls').style.display = 'flex';
+            
+            init();
+        };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+            scene.fog = new THREE.Fog(0x87CEEB, 1, 50);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 2, 5); // Starthöhe
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.body.appendChild(renderer.domElement);
+
+            const light = new THREE.AmbientLight(0xffffff, 0.7);
+            const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+            sun.position.set(5, 10, 7.5);
+            scene.add(light, sun);
+
+            if(platform === 'pc') {
+                controls = new PointerLockControls(camera, document.body);
+                document.body.addEventListener('click', () => controls.lock());
+                setupPCInputs();
+            } else {
+                setupMobileInputs();
+            }
+
+            createTerrain();
+            animate();
+        }
+
+        function createTerrain() {
+            const geo = new THREE.BoxGeometry(1, 1, 1);
+            const mat = new THREE.MeshLambertMaterial({ color: 0x55aa55 });
+            for(let x = -10; x < 10; x++) {
+                for(let z = -10; z < 10; z++) {
+                    const b = new THREE.Mesh(geo, mat);
+                    b.position.set(x, 0, z);
+                    scene.add(b);
+                    blocks.push(b);
+                }
+            }
+        }
+
+        function setupPCInputs() {
+            document.addEventListener('keydown', (e) => {
+                if(e.code === 'KeyW') move.f = true;
+                if(e.code === 'KeyS') move.b = true;
+                if(e.code === 'KeyA') move.l = true;
+                if(e.code === 'KeyD') move.r = true;
+                if(e.code === 'Space' && camera.position.y <= 2.1) velocity.y = 5;
+            });
+            document.addEventListener('keyup', (e) => {
+                if(e.code === 'KeyW') move.f = false;
+                if(e.code === 'KeyS') move.b = false;
+                if(e.code === 'KeyA') move.l = false;
+                if(e.code === 'KeyD') move.r = false;
+            });
+        }
+
+        function setupMobileInputs() {
+            document.getElementById('m-up').ontouchstart = () => move.f = true;
+            document.getElementById('m-up').ontouchend = () => move.f = false;
+            document.getElementById('m-jump').ontouchstart = () => { if(camera.position.y <= 2.1) velocity.y = 5; };
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            // Reibung & Schwerkraft
+            velocity.x -= velocity.x * 10.0 * delta;
+            velocity.z -= velocity.z * 10.0 * delta;
+            velocity.y -= 9.8 * delta; 
+
+            // Bewegung berechnen
+            const dir = new THREE.Vector3();
+            dir.z = Number(move.f) - Number(move.b);
+            dir.x = Number(move.r) - Number(move.l);
+            dir.normalize();
+
+            if (platform === 'pc' && controls.isLocked || platform === 'mobile') {
+                if (move.f || move.b) velocity.z -= dir.z * 400.0 * delta;
+                if (move.l || move.r) velocity.x -= dir.x * 400.0 * delta;
+            }
+
+            // Transformation
+            if(platform === 'pc') {
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+            } else {
+                camera.translateZ(-velocity.z * delta);
+            }
+            
+            camera.position.y += velocity.y * delta;
+
+            // Kollision Boden (Verhindert das Schweben)
+            if (camera.position.y < 2) {
+                velocity.y = 0;
+                camera.position.y = 2;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
 </body>
 </html>
